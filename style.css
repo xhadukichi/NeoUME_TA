@@ -171,12 +171,13 @@
   #highlightLayer{ position:absolute; top:0; left:0; right:0; z-index:2; pointer-events:none; color:var(--fg); }
   #newlineLayer{ position:absolute; top:0; left:0; right:0; z-index:2; pointer-events:none; }
   .newlineMarker{ position:absolute; color:#888; opacity:0.65; white-space:pre; }
-  #highlightLayer .h1{ color:var(--h1); font-weight:bold; }
-  #highlightLayer .h2{ color:var(--h2); font-weight:bold; }
-  #highlightLayer .h3{ color:var(--h3); font-weight:bold; }
-  #highlightLayer .h4{ color:var(--h4); font-weight:bold; }
-  #highlightLayer .h5{ color:var(--h5); font-weight:bold; }
-  #highlightLayer .h6{ color:var(--h6); font-weight:bold; }
+  /* Color headings without changing glyph width or soft-wrap positions. */
+  #highlightLayer .h1{ color:var(--h1); }
+  #highlightLayer .h2{ color:var(--h2); }
+  #highlightLayer .h3{ color:var(--h3); }
+  #highlightLayer .h4{ color:var(--h4); }
+  #highlightLayer .h5{ color:var(--h5); }
+  #highlightLayer .h6{ color:var(--h6); }
 
   #editorTextarea{
     position:absolute; top:0; left:0; right:0; width:100%;

@@ -5,14 +5,6 @@
     return element;
   }
 
-  interface EditContextLike extends EventTarget{
-    text: string;
-    selectionStart: number;
-    selectionEnd: number;
-    updateText(start: number, end: number, text: string): void;
-    updateSelection(start: number, end: number): void;
-  }
-
   const toolbar = getRequiredElement('toolbar');
   const spacer = getRequiredElement('spacer');
   const mainArea = getRequiredElement('mainArea');
@@ -185,8 +177,6 @@
   let documentLineStarts: number[] = [0];
   let documentCharacterCount = 0;
   let documentByteCount = 0;
-  let editContext: EditContextLike | null = null;
-  let isComposing = false;
   const undoStack: Array<{text: string; selectionStart: number; selectionEnd: number}> = [];
 
   function updateFileNameDisplay(){
@@ -278,10 +268,6 @@
     documentSelectionStart = previous.selectionStart;
     documentSelectionEnd = previous.selectionEnd;
     textarea.setSelectionRange(documentSelectionStart, documentSelectionEnd);
-    if(editContext){
-      editContext.updateText(0, editContext.text.length, documentText);
-      editContext.updateSelection(documentSelectionStart, documentSelectionEnd);
-    }
     fullUpdate();
   }
 
@@ -291,10 +277,6 @@
     documentText = textarea.value;
     documentSelectionStart = textarea.selectionStart;
     documentSelectionEnd = textarea.selectionEnd;
-    if(editContext){
-      editContext.updateText(0, editContext.text.length, documentText);
-      editContext.updateSelection(documentSelectionStart, documentSelectionEnd);
-    }
     markSaved();
   }
 
@@ -413,7 +395,7 @@
 
   function getCurrentEditorViewRange(){
     if(chapterModeLevel === 0) return {start:0, end:documentText.length, contentEnd:documentText.length};
-    const position = editContext ? editContext.selectionStart : documentSelectionStart;
+    const position = documentSelectionStart;
     const activeRange = activeChapterStart === null
       ? null
       : getChapterRanges(chapterModeLevel).find(range=>range.start === activeChapterStart);
@@ -581,113 +563,11 @@
     activeSearchMatch = {start:found, end:found + query.length, query};
     documentSelectionStart = found;
     documentSelectionEnd = found;
-    if(editContext) editContext.updateSelection(found, found);
     syncEditorViewRange();
     setTextareaSelectionFromDocument(found, found);
     renderHighlight();
-    if(editContext && document.activeElement === highlightLayer) syncDOMSelectionToEditContext();
     updateCaretUI();
     scrollToSearchMatch(activeSearchMatch.start, activeSearchMatch.end);
-  }
-
-  // Convert the browser's DOM caret position in the rendered highlight layer
-  // back to a document offset. Empty logical lines render as a single space,
-  // so map that display-only character without adding a document character.
-  function getDocumentOffsetFromPoint(x: number, y: number){
-    let node: Node | null = null;
-    let nodeOffset = 0;
-    const doc = document as any;
-    if(typeof doc.caretPositionFromPoint === 'function'){
-      const position = doc.caretPositionFromPoint(x, y);
-      if(position){ node = position.offsetNode; nodeOffset = position.offset; }
-    } else if(typeof doc.caretRangeFromPoint === 'function'){
-      const range = doc.caretRangeFromPoint(x, y);
-      if(range){ node = range.startContainer; nodeOffset = range.startOffset; }
-    }
-    if(!node || !highlightLayer.contains(node)) return null;
-
-    const range = document.createRange();
-    range.selectNodeContents(highlightLayer);
-    range.setEnd(node, nodeOffset);
-    return getDocumentOffsetFromRenderedOffset(range.toString().length);
-  }
-
-  function getDocumentOffsetFromRenderedOffset(renderedOffset: number){
-    const viewText = getEditorViewText();
-    const lines = viewText.split('\n');
-    let renderedPosition = 0;
-    let documentPosition = 0;
-    for(let i = 0; i < lines.length; i++){
-      const lineLength = lines[i].length;
-      const renderedLineLength = Math.max(lineLength, 1);
-      if(renderedOffset <= renderedPosition + renderedLineLength){
-        return editorViewRange.start + documentPosition + Math.min(renderedOffset - renderedPosition, lineLength);
-      }
-      renderedPosition += renderedLineLength;
-      documentPosition += lineLength;
-      if(i < lines.length - 1){
-        if(renderedOffset === renderedPosition) return editorViewRange.start + documentPosition;
-        if(renderedOffset <= renderedPosition + 1) return editorViewRange.start + documentPosition + 1;
-        renderedPosition++;
-        documentPosition++;
-      }
-    }
-    return editorViewRange.start + viewText.length;
-  }
-
-  function syncDOMSelectionToEditContext(){
-    if(!editContext) return;
-    const viewText = getEditorViewText();
-    const lines = viewText.split('\n');
-    function toRenderedOffset(sourceOffset: number){
-      const offset = Math.max(0, Math.min(sourceOffset - editorViewRange.start, viewText.length));
-      let documentPosition = 0;
-      let renderedPosition = 0;
-      for(let i = 0; i < lines.length; i++){
-        const lineLength = lines[i].length;
-        if(offset <= documentPosition + lineLength){
-          return renderedPosition + offset - documentPosition;
-        }
-        documentPosition += lineLength;
-        renderedPosition += Math.max(lineLength, 1);
-        if(i < lines.length - 1){
-          if(offset === documentPosition) return renderedPosition;
-          documentPosition++;
-          renderedPosition++;
-        }
-      }
-      return renderedPosition;
-    }
-
-    function findDOMPosition(renderedOffset: number){
-      const walker = document.createTreeWalker(highlightLayer, NodeFilter.SHOW_TEXT);
-      let node: Node | null;
-      let lastTextNode: Node | null = null;
-      let traversed = 0;
-      while((node = walker.nextNode())){
-        lastTextNode = node;
-        const length = node.textContent?.length ?? 0;
-        if(renderedOffset < traversed + length){
-          return {node, offset: renderedOffset - traversed};
-        }
-        traversed += length;
-      }
-      if(lastTextNode){
-        return {node:lastTextNode, offset:lastTextNode.textContent?.length ?? 0};
-      }
-      return null;
-    }
-    const start = findDOMPosition(toRenderedOffset(editContext.selectionStart));
-    const end = findDOMPosition(toRenderedOffset(editContext.selectionEnd));
-    if(!start || !end) return;
-
-    const selection = document.getSelection();
-    if(!selection) return;
-    const range = document.createRange();
-    range.setStart(start.node, start.offset);
-    range.setEnd(end.node, end.offset);
-    selection.removeAllRanges();
-    selection.addRange(range);
   }
 
   // --- outline tree ---
@@ -790,22 +670,10 @@
 
   // --- caret position / current-line underline / auto-scroll ---
   function measureCaret(position?: number){
-    let documentPosition = position ?? (editContext ? editContext.selectionStart : editorViewRange.start + textarea.selectionStart);
-    const editorFocused = document.activeElement === textarea || document.activeElement === highlightLayer;
+    let documentPosition = position ?? editorViewRange.start + textarea.selectionStart;
+    const editorFocused = document.activeElement === textarea;
     let hasSelection = position === undefined && editorFocused && getEditorSelection().start !== getEditorSelection().end;
-    if(position === undefined && editContext && document.activeElement === highlightLayer){
-      const selection = document.getSelection();
-      if(selection?.focusNode && highlightLayer.contains(selection.focusNode)){
-        const range = document.createRange();
-        range.selectNodeContents(highlightLayer);
-        range.setEnd(selection.focusNode, selection.focusOffset);
-        documentPosition = getDocumentOffsetFromRenderedOffset(range.toString().length);
-        hasSelection = !selection.isCollapsed;
-      } else {
-        documentPosition = editContext.selectionEnd;
-        hasSelection = editContext.selectionStart !== editContext.selectionEnd;
-      }
-    } else if(position === undefined && hasSelection && textarea.selectionDirection === 'backward'){
+    if(position === undefined && hasSelection && textarea.selectionDirection === 'backward'){
       documentPosition = editorViewRange.start + textarea.selectionStart;
     } else if(position === undefined && hasSelection){
       documentPosition = editorViewRange.start + textarea.selectionEnd;
@@ -893,11 +761,7 @@
     selectionCaret.style.top = top + 'px';
     selectionCaret.style.left = left + 'px';
     selectionCaret.style.height = height + 'px';
-    if(editContext && document.activeElement === highlightLayer){
-      highlightLayer.style.caretColor = hasSelection ? 'transparent' : '';
-    } else {
-      textarea.style.caretColor = hasSelection ? 'transparent' : '';
-    }
+    textarea.style.caretColor = hasSelection ? 'transparent' : '';
 
     // current line underline
     currentLineLayer.innerHTML = '';
@@ -926,10 +790,6 @@
     syncEditorViewRange();
     renderHighlight();
     renderOutline();
-    // Reapply the DOM selection only while the EditContext host owns focus.
-    // Updating it while a dialog or another input is active can steal focus
-    // back from that control (notably the Save As filename field).
-    if(editContext && document.activeElement === highlightLayer) syncDOMSelectionToEditContext();
     updateCaretUI();
     renderLineNumbers();
   }
@@ -955,6 +815,31 @@
   });
   textarea.addEventListener('click', updateLegacySelection);
   textarea.addEventListener('keyup', updateLegacySelection);
+  textarea.addEventListener('select', updateLegacySelection);
+  textarea.addEventListener('focus', updateLegacySelection);
+  textarea.addEventListener('compositionend', ()=>{
+    requestAnimationFrame(()=>{
+      updateLegacySelection();
+      fullUpdate();
+    });
+  });
+  textarea.addEventListener('keydown', (event: KeyboardEvent)=>{
+    if(chapterModeLevel === 0) return;
+    const start = editorViewRange.start + textarea.selectionStart;
+    const end = editorViewRange.start + textarea.selectionEnd;
+    if((event.ctrlKey || event.metaKey) && (event.key === 'Home' || event.key === 'End')){
+      event.preventDefault();
+      const destination = event.key === 'Home' ? editorViewRange.start : editorViewRange.contentEnd;
+      focusEditorAtSelection(destination, destination);
+      return;
+    }
+    if(start !== end) return;
+    if((event.key === 'ArrowLeft' || event.key === 'Backspace') && start <= editorViewRange.start){
+      event.preventDefault();
+    } else if((event.key === 'ArrowRight' || event.key === 'Delete') && end >= editorViewRange.contentEnd){
+      event.preventDefault();
+    }
+  });
   textarea.addEventListener('scroll', ()=>{ /* wrapper handles scroll via CSS since textarea overflow hidden */ });
   editorWrapper.addEventListener('scroll', ()=>{
     // keep layers aligned is automatic since they're absolutely positioned within the same scrolling wrapper
@@ -963,257 +848,6 @@
     if(document.activeElement === textarea) updateLegacySelection();
   });
   window.addEventListener('resize', fullUpdate);
-
-  function initializeEditContext(){
-    const EditContextConstructor = (window as any).EditContext;
-    if(typeof EditContextConstructor !== 'function' || !('editContext' in HTMLElement.prototype)) return;
-
-    const context = new EditContextConstructor({
-      text: documentText,
-      selectionStart: textarea.selectionStart,
-      selectionEnd: textarea.selectionEnd
-    }) as EditContextLike;
-    editContext = context;
-    documentSelectionStart = context.selectionStart;
-    documentSelectionEnd = context.selectionEnd;
-
-    const editHost = highlightLayer as any;
-    editHost.editContext = context;
-    editHost.tabIndex = 0;
-    editHost.style.pointerEvents = 'auto';
-    textarea.style.pointerEvents = 'none';
-
-    document.addEventListener('selectionchange', ()=>{
-      if(document.activeElement !== editHost) return;
-      const selection = document.getSelection();
-      if(!selection?.anchorNode || !selection.focusNode ||
-         !editHost.contains(selection.anchorNode) || !editHost.contains(selection.focusNode)) return;
-
-      const getRenderedOffset = (node: Node, offset: number)=>{
-        const range = document.createRange();
-        range.selectNodeContents(editHost);
-        range.setEnd(node, offset);
-        return range.toString().length;
-      };
-      const anchor = getDocumentOffsetFromRenderedOffset(
-        getRenderedOffset(selection.anchorNode, selection.anchorOffset)
-      );
-      const focus = getDocumentOffsetFromRenderedOffset(
-        getRenderedOffset(selection.focusNode, selection.focusOffset)
-      );
-      const start = Math.min(anchor, focus);
-      let end = Math.max(anchor, focus);
-      const renderedSelectionText = selection.toString();
-      if(documentText.slice(start, end).includes('\n') && !renderedSelectionText.includes('\n')){
-        end = Math.min(end, start + renderedSelectionText.replace(/\u200b/g, '').length);
-      }
-      const changed = start !== context.selectionStart || end !== context.selectionEnd;
-      if(changed){
-        documentSelectionStart = start;
-        documentSelectionEnd = end;
-        context.updateSelection(start, end);
-        setTextareaSelectionFromDocument(start, end);
-        const previousRangeStart = editorViewRange.start;
-        if(chapterModeLevel !== 0 && getCurrentEditorViewRange().start !== previousRangeStart) fullUpdate();
-        else updateCaretUI();
-      }
-    });
-
-    editHost.addEventListener('click', (event: MouseEvent)=>{
-      const offset = getDocumentOffsetFromPoint(event.clientX, event.clientY);
-      if(offset === null) return;
-      documentSelectionStart = offset;
-      documentSelectionEnd = offset;
-      context.updateSelection(offset, offset);
-      setTextareaSelectionFromDocument(offset, offset);
-      updateCaretUI();
-    });
-
-    editHost.addEventListener('keydown', (event: KeyboardEvent)=>{
-      if(chapterModeLevel !== 0){
-        const selectionStart = Math.min(context.selectionStart, context.selectionEnd);
-        const selectionEnd = Math.max(context.selectionStart, context.selectionEnd);
-        if((event.ctrlKey || event.metaKey) && (event.key === 'Home' || event.key === 'End')){
-          event.preventDefault();
-          const destination = event.key === 'Home' ? editorViewRange.start : editorViewRange.contentEnd;
-          documentSelectionStart = destination;
-          documentSelectionEnd = destination;
-          context.updateSelection(destination, destination);
-          setTextareaSelectionFromDocument(destination, destination);
-          syncDOMSelectionToEditContext();
-          updateCaretUI();
-          return;
-        }
-        if((event.key === 'ArrowLeft' && selectionStart <= editorViewRange.start) ||
-           (event.key === 'ArrowRight' && selectionEnd >= editorViewRange.contentEnd) ||
-           (event.key === 'Backspace' && selectionStart === selectionEnd && selectionStart <= editorViewRange.start) ||
-           (event.key === 'Delete' && selectionStart === selectionEnd && selectionEnd >= editorViewRange.contentEnd)){
-          event.preventDefault();
-          return;
-        }
-      }
-      if(event.key === 'ArrowLeft' && event.shiftKey && !event.isComposing && !isComposing){
-        const selection = document.getSelection();
-        if(!selection) return;
-        const focusNode = selection?.focusNode;
-        const emptyLine = focusNode?.previousSibling;
-        const previousSeparator = emptyLine?.previousSibling;
-        if(focusNode?.nodeType === Node.TEXT_NODE && focusNode.textContent === '\n' &&
-           selection.focusOffset === 0 && emptyLine?.nodeType === Node.ELEMENT_NODE &&
-           (emptyLine as HTMLElement).classList.contains('editorLogicalLine') &&
-           emptyLine.textContent === '\u200b' && previousSeparator?.nodeType === Node.TEXT_NODE &&
-           previousSeparator.textContent === '\n' && selection.anchorNode){
-          const anchorNode = selection.anchorNode;
-          const anchorOffset = selection.anchorOffset;
-          event.preventDefault();
-          selection.setBaseAndExtent(anchorNode, anchorOffset, previousSeparator, 0);
-          const toDocumentOffset = (node: Node, offset: number)=>{
-            const range = document.createRange();
-            range.selectNodeContents(editHost);
-            range.setEnd(node, offset);
-            return getDocumentOffsetFromRenderedOffset(range.toString().length);
-          };
-          const anchor = toDocumentOffset(anchorNode, anchorOffset);
-          const focus = toDocumentOffset(previousSeparator, 0);
-          const start = Math.min(anchor, focus);
-          const end = Math.max(anchor, focus);
-          documentSelectionStart = start;
-          documentSelectionEnd = end;
-          context.updateSelection(start, end);
-          setTextareaSelectionFromDocument(start, end);
-          updateCaretUI();
-          return;
-        }
-      }
-      if(event.key === 'ArrowRight' && event.shiftKey && !event.isComposing && !isComposing){
-        const selection = document.getSelection();
-        if(!selection) return;
-        const focusNode = selection?.focusNode;
-        const focusLine = focusNode?.parentElement;
-        const focusLineSeparator = focusLine?.nextSibling;
-        if(selection?.isCollapsed && focusNode?.nodeType === Node.TEXT_NODE &&
-           focusNode.textContent === '\u200b' && selection.focusOffset === 0 &&
-           focusLine?.classList.contains('editorLogicalLine') &&
-           focusLine.textContent === '\u200b' && focusLineSeparator?.nodeType === Node.TEXT_NODE &&
-           focusLineSeparator.textContent === '\n'){
-          const toDocumentOffset = (node: Node, offset: number)=>{
-            const range = document.createRange();
-            range.selectNodeContents(editHost);
-            range.setEnd(node, offset);
-            return getDocumentOffsetFromRenderedOffset(range.toString().length);
-          };
-          event.preventDefault();
-          selection.setBaseAndExtent(focusNode, 0, focusLineSeparator, 1);
-          const start = toDocumentOffset(focusNode, 0);
-          const end = toDocumentOffset(focusLineSeparator, 1);
-          documentSelectionStart = Math.min(start, end);
-          documentSelectionEnd = Math.max(start, end);
-          context.updateSelection(documentSelectionStart, documentSelectionEnd);
-          setTextareaSelectionFromDocument(documentSelectionStart, documentSelectionEnd);
-          updateCaretUI();
-          return;
-        }
-        const emptyLine = focusNode?.nextSibling;
-        const nextSeparator = emptyLine?.nextSibling;
-        if(focusNode?.nodeType === Node.TEXT_NODE && focusNode.textContent === '\n' &&
-           selection.focusOffset === 1 && emptyLine?.nodeType === Node.ELEMENT_NODE &&
-           (emptyLine as HTMLElement).classList.contains('editorLogicalLine') &&
-           emptyLine.textContent === '\u200b' && nextSeparator?.nodeType === Node.TEXT_NODE &&
-           nextSeparator.textContent === '\n' && selection.anchorNode){
-          const anchorNode = selection.anchorNode;
-          const anchorOffset = selection.anchorOffset;
-          const toDocumentOffset = (node: Node, offset: number)=>{
-            const range = document.createRange();
-            range.selectNodeContents(editHost);
-            range.setEnd(node, offset);
-            return getDocumentOffsetFromRenderedOffset(range.toString().length);
-          };
-          const anchor = toDocumentOffset(anchorNode, anchorOffset);
-          const focus = toDocumentOffset(focusNode, selection.focusOffset);
-          if(anchor <= focus){
-            event.preventDefault();
-            selection.setBaseAndExtent(anchorNode, anchorOffset, nextSeparator, 1);
-            const nextFocus = toDocumentOffset(nextSeparator, 1);
-            const start = Math.min(anchor, nextFocus);
-            const end = Math.max(anchor, nextFocus);
-            documentSelectionStart = start;
-            documentSelectionEnd = end;
-            context.updateSelection(start, end);
-            setTextareaSelectionFromDocument(start, end);
-            updateCaretUI();
-            return;
-          }
-        }
-      }
-      if(event.key === 'ArrowRight' && event.shiftKey && !event.isComposing && !isComposing &&
-         context.selectionStart === context.selectionEnd &&
-         documentText[context.selectionEnd] === '\n'){
-        const start = context.selectionEnd;
-        const nextCodePoint = documentText.codePointAt(start + 1);
-        if(nextCodePoint === undefined || nextCodePoint === 10) return;
-        event.preventDefault();
-        const nextPosition = start + 1 + (nextCodePoint > 0xffff ? 2 : 1);
-        documentSelectionStart = start;
-        documentSelectionEnd = nextPosition;
-        context.updateSelection(start, nextPosition);
-        setTextareaSelectionFromDocument(start, nextPosition);
-        syncDOMSelectionToEditContext();
-        updateCaretUI();
-        return;
-      }
-      if(event.key === 'ArrowDown' && event.shiftKey && !event.isComposing && !isComposing){
-        const selection = document.getSelection();
-        if(!selection) return;
-        if(selection?.focusNode && editHost.contains(selection.focusNode)){
-          const range = document.createRange();
-          range.selectNodeContents(editHost);
-          range.setEnd(selection.focusNode, selection.focusOffset);
-          const focusOffset = getDocumentOffsetFromRenderedOffset(range.toString().length);
-          if(focusOffset === documentText.length){
-            event.preventDefault();
-            return;
-          }
-        }
-      }
-      if(event.key !== 'Enter' || event.isComposing || isComposing) return;
-      event.preventDefault();
-
-      const start = Math.min(context.selectionStart, context.selectionEnd);
-      const end = Math.max(context.selectionStart, context.selectionEnd);
-      const newPosition = start + 1;
-      recordUndoState();
-      markDirty();
-      documentText = documentText.slice(0, start) + '\n' + documentText.slice(end);
-      context.updateText(start, end, '\n');
-      context.updateSelection(newPosition, newPosition);
-      documentSelectionStart = newPosition;
-      documentSelectionEnd = newPosition;
-
-      // Keep the legacy textarea's mirror in sync without changing its input path.
-      textarea.value = getEditorViewText();
-      setTextareaSelectionFromDocument(newPosition, newPosition);
-      fullUpdate();
-    });
-
-    context.addEventListener('textupdate', (event: any)=>{
-      const start = Math.min(event.updateRangeStart, event.updateRangeEnd);
-      const end = Math.max(event.updateRangeStart, event.updateRangeEnd);
-      recordUndoState();
-      markDirty();
-      documentText = documentText.slice(0, start) + event.text + documentText.slice(end);
-      documentSelectionStart = event.selectionStart;
-      documentSelectionEnd = event.selectionEnd;
-      context.updateSelection(documentSelectionStart, documentSelectionEnd);
-
-      // Keep the legacy textarea's text and collapsed caret mirror in step while
-      // the EditContext remains the source of this input update.
-      textarea.value = getEditorViewText();
-      setTextareaSelectionFromDocument(documentSelectionStart, documentSelectionEnd);
-      fullUpdate();
-    });
-    context.addEventListener('compositionstart', ()=>{ isComposing = true; });
-    context.addEventListener('compositionend', ()=>{ isComposing = false; });
-  }
 
   // --- toolbar actions ---
   getRequiredElement('btnNew').addEventListener('click', ()=>{
@@ -1495,7 +1129,7 @@
   });
 
   document.addEventListener('keydown', (event: KeyboardEvent)=>{
-    const editorHasFocus = document.activeElement === textarea || document.activeElement === highlightLayer;
+    const editorHasFocus = document.activeElement === textarea;
     const modifierPressed = event.ctrlKey || event.metaKey;
     if(modifierPressed && event.key.toLowerCase() === 'f' && (editorHasFocus || searchPanel.contains(document.activeElement))){
       event.preventDefault();
@@ -1533,13 +1167,11 @@
     }
   });
   function getEditorSelection(){
-    const rawStart = editContext ? editContext.selectionStart : editorViewRange.start + textarea.selectionStart;
-    const rawEnd = editContext ? editContext.selectionEnd : editorViewRange.start + textarea.selectionEnd;
+    const rawStart = editorViewRange.start + textarea.selectionStart;
+    const rawEnd = editorViewRange.start + textarea.selectionEnd;
     const start = Math.min(rawStart, rawEnd);
     let end = Math.max(rawStart, rawEnd);
-    const renderedSelectionText = editContext && document.activeElement === highlightLayer
-      ? document.getSelection()?.toString() ?? ''
-      : textarea.value.slice(start - editorViewRange.start, end - editorViewRange.start);
+    const renderedSelectionText = textarea.value.slice(start - editorViewRange.start, end - editorViewRange.start);
     if(documentText.slice(start, end).includes('\n') && !renderedSelectionText.includes('\n')){
       end = Math.min(end, start + renderedSelectionText.replace(/\u200b/g, '').length);
     }
@@ -1549,19 +1181,11 @@
   function focusEditorAtSelection(start: number, end: number){
     documentSelectionStart = start;
     documentSelectionEnd = end;
-    if(editContext){
-      editContext.updateSelection(start, end);
-    }
     syncEditorViewRange();
     renderHighlight();
     renderLineNumbers();
     setTextareaSelectionFromDocument(start, end);
-    if(editContext){
-      (highlightLayer as HTMLElement).focus({preventScroll:true});
-      syncDOMSelectionToEditContext();
-    } else {
-      textarea.focus({preventScroll:true});
-    }
+    textarea.focus({preventScroll:true});
   }
 
   function replaceEditorRange(start: number, end: number, replacement: string){
@@ -1572,10 +1196,6 @@
     documentText = nextText;
     documentSelectionStart = nextPosition;
     documentSelectionEnd = nextPosition;
-    if(editContext){
-      editContext.updateText(start, end, replacement);
-      editContext.updateSelection(nextPosition, nextPosition);
-    }
     fullUpdate();
     focusEditorAtSelection(nextPosition, nextPosition);
     updateCaretUI();
@@ -1667,8 +1287,7 @@
       };
       document.addEventListener('paste', onPaste, true);
       try{
-        if(editContext) (highlightLayer as HTMLElement).focus({preventScroll:true});
-        else textarea.focus({preventScroll:true});
+        textarea.focus({preventScroll:true});
         document.execCommand('paste');
       }catch{
         // Some browsers do not expose programmatic paste; the native paste menu remains available.
@@ -1756,6 +1375,5 @@
 
   // init
   setDocumentText('');
-  initializeEditContext();
   fullUpdate();
 })();
